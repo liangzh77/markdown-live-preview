@@ -7,12 +7,15 @@ import 'github-markdown-css/github-markdown-light.css';
 const init = () => {
     let hasEdited = false;
     let scrollBarSync = false;
+    let currentTabId = 0;
+    let tabs = [];
 
     const localStorageNamespace = 'com.markdownlivepreview';
-    const localStorageKey = 'last_state';
+    const localStorageKey = 'tabs_state';
     const localStorageScrollBarKey = 'scroll_bar_settings';
     const confirmationMessage = 'Are you sure you want to reset? Your changes will be lost.';
-    // default template
+
+    // 默认模板
     const defaultInput = `# Markdown syntax guide
 
 ## Headers
@@ -23,11 +26,11 @@ const init = () => {
 
 ## Emphasis
 
-*This text will be italic*  
+*This text will be italic*
 _This will also be italic_
 
-**This text will be bold**  
-__This will also be bold__
+**This text will be bold**
+__This will also be bold_
 
 _You **can** combine them_
 
@@ -74,14 +77,14 @@ You may be using [Markdown Live Preview](https://markdownlivepreview.com/).
 
 ## Blocks of code
 
-${"`"}${"`"}${"`"}
+\`\`\`javascript
 let message = 'Hello world';
 alert(message);
-${"`"}${"`"}${"`"}
+\`\`\`
 
 ## Inline code
 
-This web site is using ${"`"}markedjs/marked${"`"}.
+This web site is using \`markedjs/marked\`.
 `;
 
     self.MonacoEnvironment = {
@@ -109,15 +112,23 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         });
 
         editor.onDidChangeModelContent(() => {
-            let changed = editor.getValue() != defaultInput;
-            if (changed) {
-                hasEdited = true;
-            }
+            hasEdited = true;
             let value = editor.getValue();
             convert(value);
-            saveLastContent(value);
+            updateCurrentTabContent(value);
+
+            // 只有在未手动重命名时才自动更新标题
+            const currentTab = tabs.find(t => t.id === currentTabId);
+            if (currentTab && !currentTab.isManuallyRenamed && value.trim() !== '') {
+                const newTitle = extractTitleFromContent(value);
+                updateCurrentTabTitle(newTitle);
+                // 第一次自动更新标题后，标记为已命名，之后不再自动更新
+                currentTab.isManuallyRenamed = true;
+                saveTabsState();
+            }
         });
 
+        // 左侧滚动带动右侧
         editor.onDidScrollChange((e) => {
             if (!scrollBarSync) {
                 return;
@@ -128,6 +139,7 @@ This web site is using ${"`"}markedjs/marked${"`"}.
             const height = editor.getLayoutInfo().height;
 
             const maxScrollTop = scrollHeight - height;
+            if (maxScrollTop <= 0) return;
             const scrollRatio = scrollTop / maxScrollTop;
 
             let previewElement = document.querySelector('#preview');
@@ -138,7 +150,7 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         return editor;
     };
 
-    // Render markdown text as html
+    // 渲染 markdown 文本为 html
     let convert = (markdown) => {
         let options = {
             headerIds: false,
@@ -149,29 +161,32 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         document.querySelector('#output').innerHTML = sanitized;
     };
 
-    // Reset input text
+    // 重置输入文本
     let reset = () => {
-        let changed = editor.getValue() != defaultInput;
+        let currentTab = tabs.find(t => t.id === currentTabId);
+        let changed = currentTab.content !== defaultInput;
         if (hasEdited || changed) {
             var confirmed = window.confirm(confirmationMessage);
             if (!confirmed) {
                 return;
             }
         }
-        presetValue(defaultInput);
+        setEditorValue(defaultInput);
+        updateCurrentTabContent(defaultInput);
+        updateTabTitle(currentTabId, 'Untitled');
         document.querySelectorAll('.column').forEach((element) => {
             element.scrollTo({ top: 0 });
         });
-    };
-
-    let presetValue = (value) => {
-        editor.setValue(value);
-        editor.revealPosition({ lineNumber: 1, column: 1 });
-        editor.focus();
         hasEdited = false;
     };
 
-    // ----- sync scroll position -----
+    let setEditorValue = (value) => {
+        editor.setValue(value);
+        editor.revealPosition({ lineNumber: 1, column: 1 });
+        editor.focus();
+    };
+
+    // 同步滚动功能
 
     let initScrollBarSync = (settings) => {
         let checkbox = document.querySelector('#sync-scroll-checkbox');
@@ -185,6 +200,44 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         });
     };
 
+    // 监听右侧预览滚动，实现双向同步
+    let setupPreviewScrollSync = () => {
+        let previewElement = document.querySelector('#preview');
+        let isSyncing = false;
+
+        previewElement.addEventListener('scroll', (e) => {
+            if (!scrollBarSync) {
+                return;
+            }
+
+            isSyncing = true;
+            const scrollTop = e.target.scrollTop;
+            const scrollHeight = e.target.scrollHeight;
+            const height = e.target.clientHeight;
+
+            const maxScrollTop = scrollHeight - height;
+            if (maxScrollTop <= 0) {
+                isSyncing = false;
+                return;
+            }
+
+            const scrollRatio = scrollTop / maxScrollTop;
+            const editorScrollHeight = editor.getScrollHeight();
+            const editorHeight = editor.getLayoutInfo().height;
+            const editorMaxScrollTop = editorScrollHeight - editorHeight;
+
+            if (editorMaxScrollTop > 0) {
+                const targetY = editorMaxScrollTop * scrollRatio;
+                editor.setScrollTop(targetY);
+            }
+
+            // 使用 setTimeout 确保下一次滚动事件能够正常处理
+            setTimeout(() => {
+                isSyncing = false;
+            }, 0);
+        });
+    };
+
     let enableScrollBarSync = () => {
         scrollBarSync = true;
     };
@@ -193,8 +246,7 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         scrollBarSync = false;
     };
 
-    // ----- clipboard utils -----
-
+    // 复制到剪贴板
     let copyToClipboard = (text, successHandler, errorHandler) => {
         navigator.clipboard.writeText(text).then(
             () => {
@@ -215,9 +267,7 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         }, 1000)
     };
 
-    // ----- setup -----
-
-    // setup navigation actions
+    // 设置重置按钮
     let setupResetButton = () => {
         document.querySelector("#reset-button").addEventListener('click', (event) => {
             event.preventDefault();
@@ -238,16 +288,227 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         });
     };
 
-    // ----- local state -----
+    // 标签页管理功能
 
-    let loadLastContent = () => {
-        let lastContent = Storehouse.getItem(localStorageNamespace, localStorageKey);
-        return lastContent;
+    // 从内容中提取第一行作为标题
+    let extractTitleFromContent = (content) => {
+        if (!content || content.trim() === '') {
+            return 'Untitled';
+        }
+
+        const lines = content.split('\n');
+        const firstLine = lines[0].trim();
+
+        // 移除 markdown 标题符号
+        let title = firstLine.replace(/^#+\s*/, '').replace(/^#/, '');
+
+        // 如果第一行是空的或只有标题符号，使用第二行
+        if (!title || title.trim() === '') {
+            const secondLine = lines[1] ? lines[1].trim() : '';
+            title = secondLine || 'Untitled';
+        }
+
+        // 限制标题长度
+        if (title.length > 30) {
+            title = title.substring(0, 30) + '...';
+        }
+
+        return title || 'Untitled';
     };
 
-    let saveLastContent = (content) => {
+    let createTab = (content, title) => {
+        const tabId = Date.now() + Math.random();
+        const tabContent = content || '';
+
+        const newTab = {
+            id: tabId,
+            title: title || extractTitleFromContent(tabContent),
+            content: tabContent,
+            isManuallyRenamed: !!title // 如果提供了标题，说明是手动设置的
+        };
+
+        // 只有在明确提供了自定义标题时才标记为手动重命名
+        // 其他情况（包括自动生成的Untitled）都允许自动更新
+        if (!title) {
+            newTab.isManuallyRenamed = false;
+        }
+
+        tabs.push(newTab);
+        renderTabs();
+        switchToTab(tabId);
+        saveTabsState();
+        return tabId;
+    };
+
+    let deleteTab = (tabId) => {
+        if (tabs.length === 1) {
+            alert('Cannot delete the last tab');
+            return;
+        }
+
+        const tabIndex = tabs.findIndex(t => t.id === tabId);
+        if (tabIndex === -1) return;
+
+        tabs.splice(tabIndex, 1);
+
+        if (currentTabId === tabId) {
+            const newIndex = Math.max(0, tabIndex - 1);
+            switchToTab(tabs[newIndex].id);
+        }
+
+        renderTabs();
+        saveTabsState();
+    };
+
+    let switchToTab = (tabId) => {
+        const tab = tabs.find(t => t.id === tabId);
+        if (!tab) return;
+
+        currentTabId = tabId;
+        setEditorValue(tab.content);
+        convert(tab.content);
+
+        // 更新标签状态
+        document.querySelectorAll('.tab').forEach(tabEl => {
+            tabEl.classList.remove('active');
+        });
+        const activeTab = document.querySelector(`[data-tab-id="${tabId}"]`);
+        if (activeTab) {
+            activeTab.classList.add('active');
+        }
+    };
+
+    let updateCurrentTabContent = (content) => {
+        const tab = tabs.find(t => t.id === currentTabId);
+        if (tab) {
+            tab.content = content;
+            saveTabsState();
+        }
+    };
+
+    let updateTabTitle = (tabId, newTitle, markAsManual = false) => {
+        const tab = tabs.find(t => t.id === tabId);
+        if (tab) {
+            tab.title = newTitle;
+            if (markAsManual) {
+                tab.isManuallyRenamed = true;
+            }
+            renderTabs();
+            saveTabsState();
+        }
+    };
+
+    let updateCurrentTabTitle = (newTitle) => {
+        const tab = tabs.find(t => t.id === currentTabId);
+        if (tab) {
+            tab.title = newTitle;
+            renderTabs();
+            saveTabsState();
+        }
+    };
+
+    let renderTabs = () => {
+        const container = document.querySelector('#tabs-container');
+        container.innerHTML = '';
+
+        tabs.forEach(tab => {
+            const tabElement = document.createElement('div');
+            tabElement.className = 'tab';
+            tabElement.dataset.tabId = tab.id;
+
+            if (tab.id === currentTabId) {
+                tabElement.classList.add('active');
+            }
+
+            const tabText = document.createElement('span');
+            tabText.className = 'tab-text';
+            tabText.textContent = tab.title;
+            tabText.title = tab.title;
+
+            const tabClose = document.createElement('button');
+            tabClose.className = 'tab-close';
+            tabClose.innerHTML = '×';
+            tabClose.title = 'Close tab';
+
+            tabElement.appendChild(tabText);
+            tabElement.appendChild(tabClose);
+
+            // 双击编辑标签标题
+            tabElement.addEventListener('dblclick', (e) => {
+                if (e.target === tabClose) return;
+
+                e.stopPropagation();
+                const tabTextEl = tabElement.querySelector('.tab-text');
+                const currentTitle = tab.title;
+
+                // 创建输入框
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = currentTitle;
+                input.style.width = '100%';
+                input.style.fontSize = '11px';
+                input.style.border = 'none';
+                input.style.outline = 'none';
+                input.style.backgroundColor = 'rgba(255, 255, 255, 0.9)';
+                input.style.padding = '2px 4px';
+                input.style.borderRadius = '3px';
+
+                // 替换文本为输入框
+                tabTextEl.innerHTML = '';
+                tabTextEl.appendChild(input);
+                input.focus();
+                input.select();
+
+                // 完成编辑
+                const finishEdit = () => {
+                    const newTitle = input.value.trim() || currentTitle;
+                    updateTabTitle(tab.id, newTitle, true); // 标记为手动重命名
+                };
+
+                input.addEventListener('blur', finishEdit);
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        finishEdit();
+                    } else if (e.key === 'Escape') {
+                        renderTabs();
+                    }
+                });
+            });
+
+            // 单击标签切换
+            tabElement.addEventListener('click', (e) => {
+                if (e.target === tabClose) {
+                    e.stopPropagation();
+                    deleteTab(tab.id);
+                } else {
+                    switchToTab(tab.id);
+                }
+            });
+
+            container.appendChild(tabElement);
+        });
+    };
+
+    let setupTabBar = () => {
+        const addButton = document.querySelector('#add-tab-button');
+        addButton.addEventListener('click', () => {
+            createTab('', null); // 不提供标题，让它自动从内容提取
+        });
+    };
+
+    // 本地存储
+
+    let saveTabsState = () => {
         let expiredAt = new Date(2099, 1, 1);
-        Storehouse.setItem(localStorageNamespace, localStorageKey, content, expiredAt);
+        Storehouse.setItem(localStorageNamespace, localStorageKey, {
+            tabs: tabs,
+            currentTabId: currentTabId
+        }, expiredAt);
+    };
+
+    let loadTabsState = () => {
+        let savedState = Storehouse.getItem(localStorageNamespace, localStorageKey);
+        return savedState;
     };
 
     let loadScrollBarSettings = () => {
@@ -260,6 +521,7 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         Storehouse.setItem(localStorageNamespace, localStorageScrollBarKey, settings, expiredAt);
     };
 
+    // 分割线拖拽
     let setupDivider = () => {
         let lastLeftRatio = 0.5;
         const divider = document.getElementById('split-divider');
@@ -336,19 +598,36 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         });
     };
 
-    // ----- entry point -----
-    let lastContent = loadLastContent();
+    // 入口点
     let editor = setupEditor();
-    if (lastContent) {
-        presetValue(lastContent);
+
+    // 加载保存的标签页状态
+    let savedState = loadTabsState();
+    if (savedState && savedState.tabs && savedState.tabs.length > 0) {
+        tabs = savedState.tabs;
+        // 确保所有标签都有 isManuallyRenamed 属性
+        tabs.forEach(tab => {
+            if (typeof tab.isManuallyRenamed === 'undefined') {
+                tab.isManuallyRenamed = false;
+            }
+        });
+        currentTabId = savedState.currentTabId || tabs[0].id;
+        renderTabs();
+        switchToTab(currentTabId);
     } else {
-        presetValue(defaultInput);
+        // 创建默认标签页
+        createTab(defaultInput, 'Welcome');
     }
+
     setupResetButton();
     setupCopyButton(editor);
+    setupTabBar();
 
     let scrollBarSettings = loadScrollBarSettings() || false;
     initScrollBarSync(scrollBarSettings);
+
+    // 设置右侧预览滚动监听
+    setupPreviewScrollSync();
 
     setupDivider();
 };
