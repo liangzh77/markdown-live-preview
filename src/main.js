@@ -13,7 +13,14 @@ const init = () => {
     const localStorageNamespace = 'com.markdownlivepreview';
     const localStorageKey = 'tabs_state';
     const localStorageScrollBarKey = 'scroll_bar_settings';
+    const localStorageFontSizeKey = 'font_size_settings';
     const confirmationMessage = 'Are you sure you want to reset? Your changes will be lost.';
+
+    // 字体大小设置
+    const defaultFontSize = 14;
+    const minFontSize = 10;
+    const maxFontSize = 32;
+    let currentFontSize = defaultFontSize;
 
     // 默认模板
     const defaultInput = `# Markdown syntax guide
@@ -521,6 +528,49 @@ This web site is using \`markedjs/marked\`.
         Storehouse.setItem(localStorageNamespace, localStorageScrollBarKey, settings, expiredAt);
     };
 
+    // 字体大小存储
+    let loadFontSizeSettings = () => {
+        let savedFontSize = Storehouse.getItem(localStorageNamespace, localStorageFontSizeKey);
+        return savedFontSize;
+    };
+
+    let saveFontSizeSettings = (fontSize) => {
+        let expiredAt = new Date(2099, 1, 1);
+        Storehouse.setItem(localStorageNamespace, localStorageFontSizeKey, fontSize, expiredAt);
+    };
+
+    // 更新字体大小
+    let updateFontSize = (newSize) => {
+        currentFontSize = Math.max(minFontSize, Math.min(maxFontSize, newSize));
+
+        // 更新编辑器字体大小
+        editor.updateOptions({ fontSize: currentFontSize });
+
+        // 更新预览区域字体大小
+        const outputElement = document.querySelector('#output');
+        if (outputElement) {
+            outputElement.style.fontSize = currentFontSize + 'px';
+        }
+
+        // 保存设置
+        saveFontSizeSettings(currentFontSize);
+    };
+
+    // 设置顶部区域滚轮缩放
+    let setupHeaderZoom = () => {
+        const header = document.querySelector('header');
+
+        header.addEventListener('wheel', (e) => {
+            e.preventDefault();
+
+            // 滚轮向上放大，向下缩小
+            const delta = e.deltaY < 0 ? 1 : -1;
+            const newSize = currentFontSize + delta;
+
+            updateFontSize(newSize);
+        }, { passive: false });
+    };
+
     // 分割线拖拽
     let setupDivider = () => {
         let lastLeftRatio = 0.5;
@@ -625,6 +675,16 @@ This web site is using \`markedjs/marked\`.
 
     let scrollBarSettings = loadScrollBarSettings() || false;
     initScrollBarSync(scrollBarSettings);
+
+    // 加载字体大小设置
+    let savedFontSize = loadFontSizeSettings();
+    if (savedFontSize) {
+        currentFontSize = savedFontSize;
+        updateFontSize(currentFontSize);
+    }
+
+    // 设置顶部区域滚轮缩放
+    setupHeaderZoom();
 
     // 设置右侧预览滚动监听
     setupPreviewScrollSync();
