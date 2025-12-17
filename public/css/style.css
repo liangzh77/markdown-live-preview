@@ -64,6 +64,10 @@ header a:hover {
   margin-right: 16px;
 }
 
+#clear-all-button {
+    margin-left: 16px;
+}
+
 #reset-button {
     margin-left: 16px;
 }

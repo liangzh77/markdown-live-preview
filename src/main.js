@@ -282,6 +282,27 @@ This web site is using \`markedjs/marked\`.
         });
     };
 
+    // 清空所有标签页
+    let clearAllTabs = () => {
+        const confirmed = window.confirm('Are you sure you want to clear all tabs? All content will be lost.');
+        if (!confirmed) {
+            return;
+        }
+
+        // 清空所有标签页，创建一个新的空白标签页
+        tabs = [];
+        createTab('', null);
+        hasEdited = false;
+    };
+
+    // 设置清空所有按钮
+    let setupClearAllButton = () => {
+        document.querySelector("#clear-all-button").addEventListener('click', (event) => {
+            event.preventDefault();
+            clearAllTabs();
+        });
+    };
+
     let setupCopyButton = (editor) => {
         document.querySelector("#copy-button").addEventListener('click', (event) => {
             event.preventDefault();
@@ -682,6 +703,7 @@ This web site is using \`markedjs/marked\`.
         createTab(defaultInput, 'Welcome');
     }
 
+    setupClearAllButton();
     setupResetButton();
     setupCopyButton(editor);
     setupTabBar();
