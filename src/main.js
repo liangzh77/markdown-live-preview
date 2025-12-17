@@ -560,6 +560,7 @@ This web site is using \`markedjs/marked\`.
     let setupHeaderZoom = () => {
         const header = document.querySelector('header');
 
+        // 顶部区域直接滚轮缩放
         header.addEventListener('wheel', (e) => {
             e.preventDefault();
 
@@ -568,6 +569,18 @@ This web site is using \`markedjs/marked\`.
             const newSize = currentFontSize + delta;
 
             updateFontSize(newSize);
+        }, { passive: false });
+
+        // 全局 Alt+滚轮 缩放
+        document.addEventListener('wheel', (e) => {
+            if (e.altKey) {
+                e.preventDefault();
+
+                const delta = e.deltaY < 0 ? 1 : -1;
+                const newSize = currentFontSize + delta;
+
+                updateFontSize(newSize);
+            }
         }, { passive: false });
     };
 
