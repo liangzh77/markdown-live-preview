@@ -157,13 +157,78 @@ This web site is using \`markedjs/marked\`.
         return editor;
     };
 
+    // 修复断行的表格行（将跨行的表格行合并为单行）
+    let fixBrokenTableRows = (markdown) => {
+        const lines = markdown.split('\n');
+        const result = [];
+        let inTable = false;
+        let pendingRow = null;
+
+        for (let i = 0; i < lines.length; i++) {
+            const trimmed = lines[i].trim();
+
+            // 检测表格分隔行（如 | --- | --- |）
+            if (/^\|[\s\-:|]+\|$/.test(trimmed)) {
+                inTable = true;
+                if (pendingRow !== null) {
+                    result.push(pendingRow);
+                    pendingRow = null;
+                }
+                result.push(lines[i]);
+                continue;
+            }
+
+            if (!inTable) {
+                result.push(lines[i]);
+                continue;
+            }
+
+            // 在表格上下文中
+            if (trimmed === '') {
+                if (pendingRow !== null) {
+                    continue; // 跳过断行中的空行
+                } else {
+                    inTable = false;
+                    result.push(lines[i]);
+                    continue;
+                }
+            }
+
+            if (pendingRow !== null) {
+                // 将续行合并到未完成的行中
+                pendingRow = pendingRow.trimEnd() + ' ' + trimmed;
+                if (pendingRow.trim().endsWith('|')) {
+                    result.push(pendingRow);
+                    pendingRow = null;
+                }
+            } else if (trimmed.startsWith('|')) {
+                if (trimmed.endsWith('|')) {
+                    result.push(lines[i]);
+                } else {
+                    pendingRow = lines[i];
+                }
+            } else {
+                // 非表格行，退出表格上下文
+                inTable = false;
+                result.push(lines[i]);
+            }
+        }
+
+        if (pendingRow !== null) {
+            result.push(pendingRow);
+        }
+
+        return result.join('\n');
+    };
+
     // 渲染 markdown 文本为 html
     let convert = (markdown) => {
         let options = {
             headerIds: false,
             mangle: false
         };
-        let html = marked.parse(markdown, options);
+        let fixed = fixBrokenTableRows(markdown);
+        let html = marked.parse(fixed, options);
         let sanitized = DOMPurify.sanitize(html);
         document.querySelector('#output').innerHTML = sanitized;
     };
