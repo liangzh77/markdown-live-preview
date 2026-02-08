@@ -221,6 +221,41 @@ This web site is using \`markedjs/marked\`.
         return result.join('\n');
     };
 
+    // 修复CJK文本中加粗(**/__)因CommonMark标点规则无法解析的问题
+    // 当 ** 前面是非空白/非标点字符（如CJK）且后面紧跟标点时，不满足左侧分隔符条件
+    // 当 ** 前面是标点且后面紧跟非空白/非标点字符时，不满足右侧分隔符条件
+    let fixCJKBoldEmphasis = (markdown) => {
+        let inCodeBlock = false;
+        const isNonWsNonPunct = (ch) => ch !== '' && !/[\s]/u.test(ch) && !/\p{P}/u.test(ch);
+
+        return markdown.split('\n').map(line => {
+            const trimmedLine = line.trim();
+            if (trimmedLine.startsWith('```')) {
+                inCodeBlock = !inCodeBlock;
+                return line;
+            }
+            if (inCodeBlock) return line;
+
+            return line.replace(/\*\*(.+?)\*\*/gu, (match, content, offset) => {
+                const charBefore = offset > 0 ? line[offset - 1] : '';
+                const afterEnd = offset + match.length;
+                const charAfter = afterEnd < line.length ? line[afterEnd] : '';
+                const firstChar = content[0];
+                const lastChar = content[content.length - 1];
+
+                // 开头 ** 失败：前面是非空白/非标点，后面是标点
+                const openFail = isNonWsNonPunct(charBefore) && /\p{P}/u.test(firstChar);
+                // 结尾 ** 失败：前面是标点，后面是非空白/非标点
+                const closeFail = /\p{P}/u.test(lastChar) && isNonWsNonPunct(charAfter);
+
+                if (openFail || closeFail) {
+                    return `<strong>${content}</strong>`;
+                }
+                return match;
+            });
+        }).join('\n');
+    };
+
     // 渲染 markdown 文本为 html
     let convert = (markdown) => {
         let options = {
@@ -228,6 +263,7 @@ This web site is using \`markedjs/marked\`.
             mangle: false
         };
         let fixed = fixBrokenTableRows(markdown);
+        fixed = fixCJKBoldEmphasis(fixed);
         let html = marked.parse(fixed, options);
         let sanitized = DOMPurify.sanitize(html);
         document.querySelector('#output').innerHTML = sanitized;
