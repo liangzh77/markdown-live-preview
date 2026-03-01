@@ -826,6 +826,228 @@ This web site is using \`markedjs/marked\`.
     setupPreviewScrollSync();
 
     setupDivider();
+
+    // ========================================
+    // 拖拽文件功能
+    // ========================================
+    
+    let setupFileDrop = () => {
+        const dropOverlay = document.getElementById('drop-overlay');
+        
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            document.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.dataTransfer) {
+                    e.dataTransfer.dropEffect = 'copy';
+                }
+            }, false);
+        });
+        
+        document.addEventListener('dragenter', (e) => {
+            const items = e.dataTransfer.items;
+            if (items && items.length > 0) {
+                for (let i = 0; i < items.length; i++) {
+                    if (items[i].kind === 'file') {
+                        dropOverlay.style.display = 'block';
+                        break;
+                    }
+                }
+            }
+        }, false);
+        
+        document.addEventListener('dragleave', (e) => {
+            if (e.clientX === 0 && e.clientY === 0) {
+                dropOverlay.style.display = 'none';
+            }
+        }, false);
+        
+        document.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropOverlay.style.display = 'none';
+            
+            const files = e.dataTransfer.files;
+            if (files && files.length > 0) {
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    if (file.name.endsWith('.md') || file.name.endsWith('.markdown')) {
+                        const reader = new FileReader();
+                        reader.onload = (event) => {
+                            const content = event.target.result;
+                            const newTabId = createTab(content, file.name.replace(/\.(md|markdown)$/i, ''));
+                            console.log(`✅ Loaded file: ${file.name} into tab ${newTabId}`);
+                        };
+                        reader.onerror = () => {
+                            console.error(`❌ Failed to read file: ${file.name}`);
+                        };
+                        reader.readAsText(file, 'UTF-8');
+                    } else {
+                        alert(`File "${file.name}" is not a markdown file. Please drop .md or .markdown files.`);
+                    }
+                }
+            }
+        }, false);
+    };
+    
+    // ========================================
+    // GitHub 提交功能
+    // ========================================
+    
+    let setupGitHubModal = () => {
+        const githubButton = document.getElementById('github-button');
+        const githubModal = document.getElementById('github-modal');
+        const githubCancel = document.getElementById('github-cancel');
+        const githubCommit = document.getElementById('github-commit');
+        const githubStatus = document.getElementById('github-status');
+        const githubToken = document.getElementById('github-token');
+        const githubRepo = document.getElementById('github-repo');
+        const githubBranch = document.getElementById('github-branch');
+        const githubPath = document.getElementById('github-path');
+        const githubMessage = document.getElementById('github-message');
+        
+        if (githubButton) {
+            githubButton.addEventListener('click', (e) => {
+                e.preventDefault();
+                githubModal.style.display = 'block';
+                const savedToken = localStorage.getItem('github_token');
+                if (savedToken) {
+                    githubToken.value = savedToken;
+                }
+            });
+        }
+        
+        if (githubCancel) {
+            githubCancel.addEventListener('click', () => {
+                githubModal.style.display = 'none';
+                githubStatus.textContent = '';
+            });
+        }
+        
+        githubModal.addEventListener('click', (e) => {
+            if (e.target === githubModal) {
+                githubModal.style.display = 'none';
+                githubStatus.textContent = '';
+            }
+        });
+        
+        if (githubCommit) {
+            githubCommit.addEventListener('click', async () => {
+                const token = githubToken.value.trim();
+                const repo = githubRepo.value.trim();
+                const branch = githubBranch.value.trim() || 'main';
+                const path = githubPath.value.trim();
+                const message = githubMessage.value.trim() || 'Update from Markdown Tab';
+                
+                if (!token) {
+                    githubStatus.textContent = '❌ Please enter GitHub token';
+                    githubStatus.style.color = 'red';
+                    return;
+                }
+                
+                if (!repo || !repo.includes('/')) {
+                    githubStatus.textContent = '❌ Please enter valid repository (username/repo-name)';
+                    githubStatus.style.color = 'red';
+                    return;
+                }
+                
+                if (!path) {
+                    githubStatus.textContent = '❌ Please enter file path';
+                    githubStatus.style.color = 'red';
+                    return;
+                }
+                
+                localStorage.setItem('github_token', token);
+                const content = editor.getValue();
+                
+                githubStatus.textContent = '⏳ Committing to GitHub...';
+                githubStatus.style.color = 'blue';
+                githubCommit.disabled = true;
+                
+                try {
+                    const result = await commitToGitHub(token, repo, path, content, message, branch);
+                    githubStatus.textContent = `✅ Success! ${result.url}`;
+                    githubStatus.style.color = 'green';
+                    
+                    setTimeout(() => {
+                        githubModal.style.display = 'none';
+                        githubStatus.textContent = '';
+                    }, 3000);
+                } catch (error) {
+                    githubStatus.textContent = `❌ Error: ${error.message}`;
+                    githubStatus.style.color = 'red';
+                } finally {
+                    githubCommit.disabled = false;
+                }
+            });
+        }
+    };
+    
+    async function getFileSha(token, repo, path, branch) {
+        const url = `https://api.github.com/repos/${repo}/contents/${path}?ref=${branch}`;
+        
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': `token ${token}`,
+                'Accept': 'application/vnd.github.v3+json',
+            },
+        });
+        
+        if (response.status === 404) {
+            return null;
+        }
+        
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`Failed to get file SHA: ${response.status} - ${error}`);
+        }
+        
+        const data = await response.json();
+        return data.sha;
+    }
+    
+    async function commitToGitHub(token, repo, path, content, message, branch = 'main') {
+        const url = `https://api.github.com/repos/${repo}/contents/${path}`;
+        const existingSha = await getFileSha(token, repo, path, branch);
+        
+        const body = {
+            message: message,
+            content: btoa(unescape(encodeURIComponent(content))),
+            branch: branch,
+        };
+        
+        if (existingSha) {
+            body.sha = existingSha;
+        }
+        
+        const response = await fetch(url, {
+            method: 'PUT',
+            headers: {
+                'Authorization': `token ${token}`,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(body),
+        });
+        
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`Failed to commit: ${response.status} - ${error}`);
+        }
+        
+        const data = await response.json();
+        return {
+            success: true,
+            url: data.content.html_url,
+            sha: data.commit.sha,
+        };
+    }
+    
+    // Call the new functions
+    setupFileDrop();
+    setupGitHubModal();
+
 };
 
 window.addEventListener("load", () => {
